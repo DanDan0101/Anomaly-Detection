@@ -123,6 +123,15 @@ print("Testset consists of {} batches of {} samples each, total {} samples".form
 
 realdata = featureList(X_train)
 
+plt.clf()
+plt.title("Herwig Background Features")
+plt.ylabel("$\\tau_{21J_2}$")
+plt.xlabel("$\\tau_{21J_1}$")
+
+plt.hist2d(realdata[:,0], realdata[:,1], bins = BINS, range = data_range, density = True, alpha = 0.5, cmap = 'Oranges', label = "Herwig Background")
+plt.colorbar()
+plt.savefig("{}trainset-img.png".format(PREFIX))
+
 train_dataset = tf.data.Dataset.from_tensor_slices(np.array(X_train)).batch(BATCH_SIZE)
 test_dataset = tf.data.Dataset.from_tensor_slices(np.array(X_test)).batch(BATCH_SIZE)
 
@@ -262,7 +271,7 @@ def train_step_discriminator(images):
 
 @tf.function
 def evaluate_generator():
-    noise = tf.random.normal([BATCH_SIZE, BINS])
+    noise = tf.random.normal([BATCH_SIZE, 100])
     generated_images = generator(noise, training=False)
 
     fake_output = discriminator(generated_images, training=False)
@@ -274,7 +283,7 @@ def evaluate_generator():
 
 @tf.function
 def evaluate_discriminator(images):
-    noise = tf.random.normal([BATCH_SIZE, BINS])
+    noise = tf.random.normal([BATCH_SIZE, 100])
     generated_images = generator(noise, training=False)
 
     real_output = discriminator(images, training=False)
@@ -290,7 +299,7 @@ def evaluate_discriminator(images):
 
 
 def graph_gan(generator, epoch):
-    fakedata = featureList(generator(tf.random.normal((400*BINS*BINS, 100)), training=False)) # Worst-case Poisson uncertainty is 5%
+    fakedata = featureList(generator(tf.random.normal((5000, 100)), training=False))
 
     plt.clf()
 
@@ -311,6 +320,23 @@ def graph_gan(generator, epoch):
     ax2.hist(fakedata[:,1], bins = BINS, range = (data_range[1,0], data_range[1,1]), color = "tab:blue", histtype = "step", label = "GAN", density = True)
     
     plt.savefig("{}epoch{}-gan.png".format(PREFIX, epoch))
+
+def graph_image(generator, epoch):
+    fakedata = featureList(generator(tf.random.normal((5000, 100)), training=False))
+    plt.title("Herwig Background Features")
+    plt.ylabel("$\\tau_{21J_2}$")
+    plt.xlabel("$\\tau_{21J_1}$")
+
+    plt.clf()
+
+    # plt.hist2d(realdata[:,0], realdata[:,1], bins = BINS, range = data_range, density = True, alpha = 0.5, cmap = 'Oranges', label = "Herwig Background")
+    plt.hist2d(fakedata[:,0], fakedata[:,1], bins = BINS, range = data_range, density = True, alpha = 1.0, cmap = 'Blues', label = "GAN")
+
+    plt.colorbar()
+    # plt.legend()
+
+    plt.savefig("{}epoch{}-img.png".format(PREFIX, epoch))
+
 
 
 train_gen_losses = []
@@ -386,6 +412,7 @@ def train(dataset, testset, epochs, n_critic):
     if draw_outputs:
       print()
       print("Epoch " + str(epoch + 1) + ":")
+      graph_image(generator, epoch + 1)
       graph_gan(generator, epoch + 1)
       graph_losses(epoch + 1)
 
