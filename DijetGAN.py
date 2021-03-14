@@ -23,7 +23,7 @@ DEBUG = False
 
 # Training
 BATCH_SIZE = 128
-EPOCHS = 100000 # 500000 in paper
+EPOCHS = 1000 # 500000 in paper
 
 # Optimizer
 LEARNING_RATE = 1e-5
@@ -37,14 +37,14 @@ NOISE_DIM = 128
 PREFIX = "img/{:.0f}D-{}batchsize-".format(NOISE_DIM, BATCH_SIZE)
 
 filenames = {
-    "herwig": "GAN-data\events_anomalydetection_DelphesHerwig_qcd_features.h5",
-    "pythiabg": "GAN-data\events_anomalydetection_DelphesPythia8_v2_qcd_features.h5",
-    "pythiasig": "GAN-data\events_anomalydetection_DelphesPythia8_v2_Wprime_features.h5"
+    "herwig": "GAN-data/events_anomalydetection_DelphesHerwig_qcd_features.h5",
+    "pythiabg": "GAN-data/events_anomalydetection_DelphesPythia8_v2_qcd_features.h5",
+    "pythiasig": "GAN-data/events_anomalydetection_DelphesPythia8_v2_Wprime_features.h5"
 }
 
 datatypes = ["herwig", "pythiabg", "pythiasig"]
 
-train_features = ["ptj1", "etaj1", "mj1", "tau21j1", "ptj2", "etaj2", "phij2", "mj2", "tau21j2"]
+train_features = ["ptj1", "etaj1", "mj1", "ptj2", "etaj2", "phij2", "mj2"]
 # condition_features = ["mjj"]
 
 def load_data(datatype, stop = None, rotate = True, flip_eta = True):
@@ -291,21 +291,29 @@ def graph_gan(generator, epoch):
     a[0, 1].set_title("Subleading Jet Mass")
     a[0, 1].set_ylabel("Normalized to Unity")
     a[0, 1].set_xlabel("$m_{J_2}$")
-    a[0, 1].hist(realdata[:,7], bins = 25, range = (0, 600), color = "tab:orange", alpha = 0.5, label = label, density = True)
-    a[0, 1].hist(fakedata[:,7], bins = 25, range = (0, 600), color = "tab:blue", histtype = "step", label = "GAN", density = True)
+    a[0, 1].hist(realdata[:,6], bins = 25, range = (0, 600), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[0, 1].hist(fakedata[:,6], bins = 25, range = (0, 600), color = "tab:blue", histtype = "step", label = "GAN", density = True)
     a[0, 1].legend(loc="upper right")
-
-    a[1, 0].set_title("Leading N-subjettiness ratio")
-    a[1, 0].set_ylabel("Normalized to Unity")
-    a[1, 0].set_xlabel("$\\tau_{21J_1}$")
-    a[1, 0].hist(realdata[:,3], bins = 25, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
-    a[1, 0].hist(fakedata[:,3], bins = 25, range = (0, 1), color = "tab:blue", histtype = "step", label = "GAN", density = True)
     
-    a[1, 1].set_title("Subleading N-subjettiness ratio")
+    p_real = np.sqrt((realdata[:,0]+realdata[:,3]*np.cos(realdata[:,5]))**2 + (realdata[:,3]*np.sin(realdata[:,5]))**2 + (realdata[:,0]*np.sinh(realdata[:,1])+realdata[:,3]*np.sinh(realdata[:,4]))**2)
+    e_real = np.sqrt((realdata[:,0]*np.cosh(realdata[:,1]))**2+realdata[:,2]**2) + np.sqrt((realdata[:,3]*np.cosh(realdata[:,4]))**2+realdata[:,6]**2)
+    m_real = np.sqrt(e_real**2-p_real**2)
+    
+    p_fake = np.sqrt((fakedata[:,0]+fakedata[:,3]*np.cos(fakedata[:,5]))**2 + (fakedata[:,3]*np.sin(fakedata[:,5]))**2 + (fakedata[:,0]*np.sinh(fakedata[:,1])+fakedata[:,3]*np.sinh(fakedata[:,4]))**2)
+    e_fake = np.sqrt((fakedata[:,0]*np.cosh(fakedata[:,1]))**2+fakedata[:,2]**2) + np.sqrt((fakedata[:,3]*np.cosh(fakedata[:,4]))**2+fakedata[:,6]**2)
+    m_fake = np.sqrt(e_fake**2-p_fake**2)
+
+    a[1, 0].set_title("Dijet Mass")
+    a[1, 0].set_ylabel("Normalized to Unity")
+    a[1, 0].set_xlabel("$m_{JJ}$")
+    a[1, 0].hist(m_real, bins = 25, range = (2000, 6000), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[1, 0].hist(m_fake, bins = 25, range = (2000, 6000), color = "tab:blue", histtype = "step", label = "GAN", density = True)
+    
+    a[1, 1].set_title("Dijet Energy")
     a[1, 1].set_ylabel("Normalized to Unity")
-    a[1, 1].set_xlabel("$\\tau_{21J_2}$")
-    a[1, 1].hist(realdata[:,8], bins = 25, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
-    a[1, 1].hist(fakedata[:,8], bins = 25, range = (0, 1), color = "tab:blue", histtype = "step", label = "GAN", density = True)
+    a[1, 1].set_xlabel("$E_{JJ}$")
+    a[1, 1].hist(e_real, bins = 25, range = (2000, 6000), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[1, 1].hist(e_fake, bins = 25, range = (2000, 6000), color = "tab:blue", histtype = "step", label = "GAN", density = True)
 
     if DEBUG:
         plt.show()
@@ -327,14 +335,14 @@ def graph_losses(epoch):
     f.suptitle("Loss Functions")
 
     ax1.set_title("Generator Loss")
-    ax1.set_ylabel("Wasserstein Loss")
+    ax1.set_ylabel("Mean-Square Error")
     ax1.set_xlabel("Epoch")
     ax1.plot(train_gen_losses, 'b', label = "Training loss")
     ax1.plot(test_gen_losses, 'r', label = "Validation loss")
     ax1.legend(loc="upper right")
 
     ax2.set_title("Discriminator Loss")
-    ax2.set_ylabel("Wasserstein Loss")
+    ax2.set_ylabel("Binary Cross-Entropy")
     ax2.set_xlabel("Epoch")
     ax2.plot(train_disc_losses, 'b', label = "Training loss")
     ax2.plot(test_disc_losses, 'r', label = "Validation loss")
@@ -348,7 +356,7 @@ def graph_losses(epoch):
 def train(dataset, testset, epochs):
     for epoch in tqdm(range(epochs)):
         print_losses = False #((epoch + 1) % 10 == 0)
-        draw_outputs = ((epoch + 1) % 1000 == 0)
+        draw_outputs = ((epoch + 1) % 10 == 0)
 
         train_gen_loss = 0
         train_disc_loss = 0
