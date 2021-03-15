@@ -35,6 +35,7 @@ NOISE_DIM = 128
 
 # Plotting
 PREFIX = "img/{:.0f}D-{}batchsize-".format(NOISE_DIM, BATCH_SIZE)
+DRAW_INTERVAL = 10
 
 filenames = {
     "herwig": "GAN-data/events_anomalydetection_DelphesHerwig_qcd_features.h5",
@@ -107,10 +108,15 @@ else:
 df.drop([i for i in range(df.shape[0] % (BATCH_SIZE * 4))], inplace = True)
 df.reset_index(drop = True, inplace = True)
 
+def cut_data(uncut_data, pTmin = 1200, etamax = 2.5):
+    return uncut_data[np.logical_or(np.logical_and(uncut_data[:,0] > pTmin, np.abs(uncut_data[:,1]) < etamax), np.logical_and(uncut_data[:,3] > pTmin, np.abs(uncut_data[:,4]) < etamax))]
+
+cut_df = cut_data(np.array(df[train_features]))
+
 # Normalize all inputs between -1 and 1
 
-scaler = MinMaxScaler((-1,1)).fit(df[train_features])
-feature_df = scaler.transform(df[train_features])
+scaler = MinMaxScaler((-1,1)).fit(cut_df)
+feature_df = scaler.transform(cut_df)
 
 X_train, X_test = train_test_split(feature_df, test_size = 0.25, random_state = 1234)
 len_dataset = int(X_train.shape[0] / BATCH_SIZE)
@@ -270,12 +276,14 @@ def evaluate_discriminator(vectors):
   
   return disc_loss
 
-
 def graph_gan(generator, epoch):
-    plt.clf()
+    plt.close()
 
     realdata = scaler.inverse_transform(X_train)
-    fakedata = scaler.inverse_transform(generator(tf.random.uniform((10000, NOISE_DIM)), training=False))
+    fakedata_uncut = scaler.inverse_transform(generator(tf.random.uniform((20000, NOISE_DIM)), training=False))
+
+    # At least one jet has pT > 1200 and |eta| < 2.5
+    fakedata = cut_data(fakedata_uncut)
     
     f, a = plt.subplots(2, 2, constrained_layout=True)
 
@@ -328,7 +336,7 @@ test_disc_losses = []
 
 
 def graph_losses(epoch):
-    plt.clf()
+    plt.close()
 
     f, (ax1, ax2) = plt.subplots(2, 1, constrained_layout=True)
 
@@ -356,7 +364,8 @@ def graph_losses(epoch):
 def train(dataset, testset, epochs):
     for epoch in tqdm(range(epochs)):
         print_losses = False #((epoch + 1) % 10 == 0)
-        draw_outputs = ((epoch + 1) % 10 == 0)
+
+        draw_outputs = ((epoch + 1) % DRAW_INTERVAL == 0)
 
         train_gen_loss = 0
         train_disc_loss = 0
