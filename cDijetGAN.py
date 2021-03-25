@@ -17,22 +17,25 @@ print("Using {}".format(physical_devices[0]))
 
 tf.random.set_seed(1234)
 
-DEBUG = True
+DEBUG = False
 
 # Network hyperparameters from arXiv:1903.02433
 
 # Training
-BATCH_SIZE = 128 # 32 in Gitlab
-EPOCHS = 1000 # 500000 in paper, but on much smaller batch size
-# TODO: Pre-train discriminator
+BATCH_SIZE = 32 # 128 in paper
+EPOCHS = 1000 # 500000 in paper, but on much smaller dataset
+PRETRAIN_EPOCHS = 20
 
-# Optimizer # SGD(0.01) in Gitlab
+# Adam hyperparameters
 LEARNING_RATE = 1e-5 # TODO: Learning rate scheduler
 BETA_1 = 0.5
 BETA_2 = 0.9
 
+# SGD hyperparameters
+SGD_LEARNING_RATE = 0.01
+
 # Architecture
-NOISE_DIM = 128 # 64 in Gitlab
+NOISE_DIM = 64 # 128 in paper
 
 # Plotting
 PREFIX = "img/{:.0f}D-{}batchsize-".format(NOISE_DIM, BATCH_SIZE)
@@ -152,13 +155,10 @@ gc.collect()
 # Ensures all training batches have same size
 np_bg_SB_trimmed = np.delete(np_bg_SB, [i for i in range(np_bg_SB.shape[0] % (BATCH_SIZE * 4))], axis = 0)
 
-# Normalize inputs between -1 and 1
-scaler = MinMaxScaler((-1,1)).fit(np_bg_SB_trimmed)
-np_bg_SB_scaled = scaler.transform(np_bg_SB_trimmed)
-
-# mjj should be between 0 and 1 instead
-np_bg_SB_scaled[:,-1] += 1
-np_bg_SB_scaled[:,-1] /= 2
+# Normalize inputs between -1 and 1, mjj between 0 and 1
+scaler = MinMaxScaler((-1,1)).fit(np_bg_SB_trimmed[:,:-1])
+scaler_mjj = MinMaxScaler((0,1)).fit(np_bg_SB_trimmed[:,-1].reshape(-1,1))
+np_bg_SB_scaled = np.concatenate((scaler.transform(np_bg_SB_trimmed[:,:-1]), scaler_mjj.transform(np_bg_SB_trimmed[:,-1].reshape(-1,1))), axis = 1)
 
 X_train, X_test = train_test_split(np_bg_SB_scaled, test_size = 0.25, random_state = 1234)
 len_dataset = int(X_train.shape[0] / BATCH_SIZE)
@@ -219,10 +219,12 @@ def make_discriminator_model():
 
 generator = make_generator_model()
 generator.summary()
+print()
 
 
 discriminator = make_discriminator_model()
 discriminator.summary()
+print()
 
 mse = tf.keras.losses.MeanSquaredError()
 cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits = True)
@@ -239,9 +241,12 @@ def discriminator_loss(real_output, fake_output):
 def generator_loss(fake_output):
     return mse(tf.ones_like(fake_output), fake_output)
 
+# Paper optimizer:
+# generator_optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE, beta_1=BETA_1, beta_2=BETA_2)
+# discriminator_optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE, beta_1=BETA_1, beta_2=BETA_2)
 
-generator_optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE, beta_1=BETA_1, beta_2=BETA_2)
-discriminator_optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE, beta_1=BETA_1, beta_2=BETA_2)
+generator_optimizer = tf.keras.optimizers.SGD(SGD_LEARNING_RATE)
+discriminator_optimizer = tf.keras.optimizers.SGD(SGD_LEARNING_RATE)
 
 
 # Convert tensor to float for loss function plotting
@@ -256,13 +261,13 @@ def K_eval(x):
 
 @tf.function
 def train_step_generator(labels):
-  labels_unscaled = labels * 2 - 1
+  labels_rescaled = labels * 2 - 1
 
   gen_input = tf.concat([tf.random.uniform([BATCH_SIZE, NOISE_DIM]), labels], 1)
 
   with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
     generated_vector = generator(gen_input, training=True)
-    fake_output = discriminator(tf.concat([generated_vector, labels_unscaled], 1), training=True)
+    fake_output = discriminator(tf.concat([generated_vector, labels_rescaled], 1), training=True)
     gen_loss = generator_loss(fake_output)
 
   gradients_of_generator = gen_tape.gradient(gen_loss, generator.trainable_variables)
@@ -274,14 +279,14 @@ def train_step_generator(labels):
 
 @tf.function
 def train_step_discriminator(vectors, labels):
-  labels_unscaled = labels * 2 - 1
+  labels_rescaled = labels * 2 - 1
   gen_input = tf.concat([tf.random.uniform([BATCH_SIZE, NOISE_DIM]), labels], 1)
 
   with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
     generated_vector = generator(gen_input, training=True)
 
-    real_output = discriminator(tf.concat([vectors, labels_unscaled], 1), training=True)
-    fake_output = discriminator(tf.concat([generated_vector, labels_unscaled], 1), training=True)
+    real_output = discriminator(tf.concat([vectors, labels_rescaled], 1), training=True)
+    fake_output = discriminator(tf.concat([generated_vector, labels_rescaled], 1), training=True)
     
     disc_loss = discriminator_loss(real_output, fake_output)
 
@@ -294,12 +299,12 @@ def train_step_discriminator(vectors, labels):
 
 @tf.function
 def evaluate_generator(labels):
-  labels_unscaled = labels * 2 - 1
+  labels_rescaled = labels * 2 - 1
   gen_input = tf.concat([tf.random.uniform([BATCH_SIZE, NOISE_DIM]), labels], 1)
 
   with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
     generated_vector = generator(gen_input, training=False)
-    fake_output = discriminator(tf.concat([generated_vector, labels_unscaled], 1), training=False)
+    fake_output = discriminator(tf.concat([generated_vector, labels_rescaled], 1), training=False)
     gen_loss = generator_loss(fake_output)
   
   return gen_loss
@@ -307,14 +312,14 @@ def evaluate_generator(labels):
 
 @tf.function
 def evaluate_discriminator(vectors, labels):
-  labels_unscaled = labels * 2 - 1
+  labels_rescaled = labels * 2 - 1
   gen_input = tf.concat([tf.random.uniform([BATCH_SIZE, NOISE_DIM]), labels], 1)
 
   with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
     generated_vector = generator(gen_input, training=False)
 
-    real_output = discriminator(tf.concat([vectors, labels_unscaled], 1), training=False)
-    fake_output = discriminator(tf.concat([generated_vector, labels_unscaled], 1), training=False)
+    real_output = discriminator(tf.concat([vectors, labels_rescaled], 1), training=False)
+    fake_output = discriminator(tf.concat([generated_vector, labels_rescaled], 1), training=False)
     
     disc_loss = discriminator_loss(real_output, fake_output)
   
@@ -343,43 +348,63 @@ def graph_gan(generator, epoch, mode = "bg_SB"):
         raise ValueError("Unexpected mode {} in graph_gan()".format(mode))
 
     labels = sample_labels(refdata = realdata, size = SAMPLE_SIZE) # Sample mjj from the existing distribution of mjj for comparison
-    labels_scaled = (labels - scaler.data_min_[-1]) / (scaler.data_max_[-1] - scaler.data_min_[-1])
+    labels_scaled = scaler_mjj.transform(labels.reshape(-1,1))
     
-    fakedata_uncut_unscaled = np.concatenate((generator(tf.concat([tf.random.uniform((SAMPLE_SIZE, NOISE_DIM)), labels_scaled], 1), training=False), labels_scaled * 2 - 1), axis = 1)
-    fakedata_uncut = scaler.inverse_transform(fakedata_uncut_unscaled)
+    fakedata_uncut_unscaled = generator(tf.concat([tf.random.uniform((SAMPLE_SIZE, NOISE_DIM)), labels_scaled], 1), training=False)
+    fakedata_uncut = np.concatenate((scaler.inverse_transform(fakedata_uncut_unscaled), labels.reshape(-1,1)), axis = 1)
 
     # At least one jet has pT > 1200 and |eta| < 2.5
     fakedata = cut_data(fakedata_uncut)
     
-    f, a = plt.subplots(2, 2, constrained_layout=True)
+    f, a = plt.subplots(3, 3, constrained_layout=True)
 
-    f.suptitle("GAN Generation")
+    f.suptitle("GAN Generation Distributions (Normalized to Unity)")
 
+    a[0, 0].set_title("Leading jet pT")
+    a[0, 0].set_xlabel("$pT_{J_1}$")
+    a[0, 0].hist(realdata[:,0], bins = BINS, range = (1200, 2000), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[0, 0].hist(fakedata[:,0], bins = BINS, range = (1200, 2000), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
 
-    a[0, 0].set_title("Leading Jet Mass")
-    a[0, 0].set_ylabel("Normalized to Unity")
-    a[0, 0].set_xlabel("$m_{J_1}$")
-    a[0, 0].hist(realdata[:,2], bins = BINS, range = (0, 750), color = "tab:orange", alpha = 0.5, label = label, density = True)
-    a[0, 0].hist(fakedata[:,2], bins = BINS, range = (0, 750), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+    a[0, 1].set_title("Leading jet eta")
+    a[0, 1].set_xlabel("$\\eta_{J_1}$")
+    a[0, 1].hist(realdata[:,1], bins = BINS, range = (0, 2.5), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[0, 1].hist(fakedata[:,1], bins = BINS, range = (0, 2.5), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
 
-    a[0, 1].set_title("Subleading Jet Mass")
-    a[0, 1].set_ylabel("Normalized to Unity")
-    a[0, 1].set_xlabel("$m_{J_2}$")
-    a[0, 1].hist(realdata[:,6], bins = BINS, range = (0, 750), color = "tab:orange", alpha = 0.5, label = label, density = True)
-    a[0, 1].hist(fakedata[:,6], bins = BINS, range = (0, 750), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
-    a[0, 1].legend(loc="upper right")
-
-    a[1, 0].set_title("Leading N-Subjettiness Ratio")
-    a[1, 0].set_ylabel("Normalized to Unity")
-    a[1, 0].set_xlabel("$\\tau_{21J_1}$")
-    a[1, 0].hist(realdata[:,7], bins = BINS, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
-    a[1, 0].hist(fakedata[:,7], bins = BINS, range = (0, 1), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+    a[0, 2].set_title("Leading jet mass")
+    a[0, 2].set_xlabel("$m_{J_1}$")
+    a[0, 2].hist(realdata[:,2], bins = BINS, range = (0, 750), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[0, 2].hist(fakedata[:,2], bins = BINS, range = (0, 750), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
     
-    a[1, 1].set_title("Subleading N-Subjettiness Ratio")
-    a[1, 1].set_ylabel("Normalized to Unity")
-    a[1, 1].set_xlabel("$\\tau_{21J_2}$")
-    a[1, 1].hist(realdata[:,8], bins = BINS, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
-    a[1, 1].hist(fakedata[:,8], bins = BINS, range = (0, 1), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+    a[1, 0].set_title("Subleading jet pT")
+    a[1, 0].set_xlabel("$pT_{J_2}$")
+    a[1, 0].hist(realdata[:,3], bins = BINS, range = (500, 2000), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[1, 0].hist(fakedata[:,3], bins = BINS, range = (500, 2000), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+
+    a[1, 1].set_title("Subleading jet eta")
+    a[1, 1].set_xlabel("$\\eta_{J_2}$")
+    a[1, 1].hist(realdata[:,4], bins = BINS, range = (0, 2.5), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[1, 1].hist(fakedata[:,4], bins = BINS, range = (0, 2.5), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+    a[1, 1].legend(loc="upper right")
+
+    a[1, 2].set_title("Subleading jet mass")
+    a[1, 2].set_xlabel("$m_{21J_2}$")
+    a[1, 2].hist(realdata[:,6], bins = BINS, range = (0, 750), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[1, 2].hist(fakedata[:,6], bins = BINS, range = (0, 750), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+    
+    a[2, 0].set_title("Leading N-subjettiness ratio")
+    a[2, 0].set_xlabel("$\\tau_{21J_1}$")
+    a[2, 0].hist(realdata[:,7], bins = BINS, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[2, 0].hist(fakedata[:,7], bins = BINS, range = (0, 1), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+
+    a[2, 1].set_title("Subleading N-subjettiness ratio")
+    a[2, 1].set_xlabel("$\\tau_{21J_2}$")
+    a[2, 1].hist(realdata[:,8], bins = BINS, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[2, 1].hist(fakedata[:,8], bins = BINS, range = (0, 1), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+
+    a[2, 2].set_title("Dijet mass")
+    a[2, 2].set_xlabel("$m_{JJ}$")
+    a[2, 2].hist(realdata[:,9], bins = BINS, range = (1500, 5500), color = "tab:orange", alpha = 0.5, label = label, density = True)
+    a[2, 2].hist(fakedata[:,9], bins = BINS, range = (1500, 5500), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
 
     if DEBUG:
         plt.show()
@@ -402,7 +427,6 @@ def graph_losses(epoch):
 
     ax1.set_title("Generator Loss")
     ax1.set_ylabel("Mean-Square Error")
-    ax1.set_xlabel("Epoch")
     ax1.plot(train_gen_losses, 'b', label = "Training loss")
     ax1.plot(test_gen_losses, 'r', label = "Validation loss")
     ax1.legend(loc="upper right")
@@ -418,12 +442,16 @@ def graph_losses(epoch):
     else:
         plt.savefig("{}epoch{}-loss.png".format(PREFIX, epoch))
 
+# TODO: Pre-train discriminator
 
-def train(dataset, testset, epochs):
+def train(dataset, testset, epochs, pretrain = False):
     for epoch in tqdm(range(epochs)):
         print_losses = False #((epoch + 1) % 10 == 0)
 
-        draw_outputs = ((epoch + 1) % DRAW_INTERVAL == 0)
+        if pretrain:
+            draw_outputs = False
+        else:
+            draw_outputs = ((epoch + 1) % DRAW_INTERVAL == 0)
 
         train_gen_loss = 0
         train_disc_loss = 0
@@ -436,23 +464,27 @@ def train(dataset, testset, epochs):
         for batchnum, image_batch in enumerate(dataset):
             vectors = image_batch[:,:-1]
             labels = tf.reshape(image_batch[:,-1], (BATCH_SIZE,1))
-            train_disc_loss += K_eval(train_step_discriminator(vectors, labels)) / len_dataset
-            train_gen_loss += K_eval(train_step_generator(tf.constant(sample_labels(), dtype = tf.float32))) / len_dataset
+            if pretrain:
+                train_step_discriminator(vectors, labels)
+            else:
+                train_disc_loss += K_eval(train_step_discriminator(vectors, labels)) / len_dataset
+                train_gen_loss += K_eval(train_step_generator(tf.constant(scaler_mjj.transform(sample_labels()), dtype = tf.float32))) / len_dataset
 
-
-        train_gen_losses.append(train_gen_loss)
-        train_disc_losses.append(train_disc_loss)
+        if not pretrain:
+            train_gen_losses.append(train_gen_loss)
+            train_disc_losses.append(train_disc_loss)
 
         # Evaluation
+        if not pretrain:
+            for batchnum, test_batch in enumerate(testset):
+                vectors = test_batch[:,:-1]
+                labels = tf.reshape(test_batch[:,-1], (BATCH_SIZE,1))
+                test_gen_loss += K_eval(evaluate_generator(tf.constant(scaler_mjj.transform(sample_labels()), dtype = tf.float32))) / len_testset
+                test_disc_loss += K_eval(evaluate_discriminator(vectors, labels)) / len_testset
 
-        for batchnum, test_batch in enumerate(testset):
-            vectors = test_batch[:,:-1]
-            labels = tf.reshape(test_batch[:,-1], (BATCH_SIZE,1))
-            test_gen_loss += K_eval(evaluate_generator(tf.constant(sample_labels(), dtype = tf.float32))) / len_testset
-            test_disc_loss += K_eval(evaluate_discriminator(vectors, labels)) / len_testset
-
-        test_gen_losses.append(test_gen_loss)
-        test_disc_losses.append(test_disc_loss)
+        if not pretrain:
+            test_gen_losses.append(test_gen_loss)
+            test_disc_losses.append(test_disc_loss)
 
         # Logging
 
@@ -474,5 +506,8 @@ def train(dataset, testset, epochs):
             graph_gan(generator, epoch + 1, mode = "sig_SR")
             graph_losses(epoch + 1)
 
+print("Now pre-training discriminator for {} epochs".format(PRETRAIN_EPOCHS))
+train(train_dataset, test_dataset, PRETRAIN_EPOCHS, pretrain = True)
 
-train(train_dataset, test_dataset, EPOCHS)
+print("Now training model for {} epochs".format(EPOCHS))
+train(train_dataset, test_dataset, EPOCHS, pretrain = False)
