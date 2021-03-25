@@ -17,7 +17,7 @@ print("Using {}".format(physical_devices[0]))
 
 tf.random.set_seed(1234)
 
-DEBUG = False
+TESTING = False
 
 # Network hyperparameters from arXiv:1903.02433
 
@@ -35,13 +35,13 @@ BETA_2 = 0.9
 SGD_LEARNING_RATE = 0.01
 
 # Architecture
-NOISE_DIM = 64 # 128 in paper
+NOISE_DIM = 128 # 64 in Gitlab
 
 # Plotting
 PREFIX = "img/{:.0f}D-{}batchsize-".format(NOISE_DIM, BATCH_SIZE)
 DRAW_INTERVAL = 10
 BINS = 25
-if DEBUG:
+if TESTING:
     SAMPLE_SIZE = 2000
 else:
     SAMPLE_SIZE = 20000
@@ -110,7 +110,7 @@ def load_data(datatype, stop = None, rotate = True, flip_eta = True):
     
     return output_frame.astype('float32')
 
-if DEBUG:
+if TESTING:
     df_bg = load_data("pythiabg", stop = 10000)
     df_sig = load_data("pythiasig", stop = 1000)
 else:
@@ -146,6 +146,7 @@ def cut_data(uncut_data, pTmin = 1200, etamax = 2.5):
 np_bg_SB = cut_data(np.array(df_bg_SB[features]))
 np_bg_SR = cut_data(np.array(df_bg_SR[features]))
 np_sig_SR = cut_data(np.array(df_sig_SR[features]))
+np_combined_SR = np.concatenate((np_bg_SR, np_sig_SR), axis = 0)
 del df_bg_SB
 del df_bg_SR
 del df_sig_SB
@@ -336,14 +337,22 @@ def graph_gan(generator, epoch, mode = "bg_SB"):
         realdata = np_bg_SB
         label = "Background Sideband"
         ganlabel = "GAN"
+        title = "Background SB Generation (Normalized to Unity)"
     elif mode == "bg_SR":
         realdata = np_bg_SR
         label = "Background Signal Region"
         ganlabel = "GAN Interpolation"
+        title = "Background SR Interpolation (Normalized to Unity)"
     elif mode == "sig_SR":
         realdata = np_sig_SR
         label = "BSM Signal"
         ganlabel = "GAN Interpolation"
+        title = "BSM Signal Interpolation (Normalized to Unity)"
+    elif mode == "combined_SR":
+        realdata = np_combined_SR
+        label = "Mixed Signal Region"
+        ganlabel = "GAN Interpolation"
+        title = "Mixed Data SR Interpolation (Normalized to Unity)"
     else:
         raise ValueError("Unexpected mode {} in graph_gan()".format(mode))
 
@@ -358,7 +367,7 @@ def graph_gan(generator, epoch, mode = "bg_SB"):
     
     f, a = plt.subplots(3, 3, constrained_layout=True)
 
-    f.suptitle("GAN Generation Distributions (Normalized to Unity)")
+    f.suptitle(title)
 
     a[0, 0].set_title("Leading jet pT")
     a[0, 0].set_xlabel("$pT_{J_1}$")
@@ -384,19 +393,18 @@ def graph_gan(generator, epoch, mode = "bg_SB"):
     a[1, 1].set_xlabel("$\\eta_{J_2}$")
     a[1, 1].hist(realdata[:,4], bins = BINS, range = (0, 2.5), color = "tab:orange", alpha = 0.5, label = label, density = True)
     a[1, 1].hist(fakedata[:,4], bins = BINS, range = (0, 2.5), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
-    a[1, 1].legend(loc="upper right")
 
     a[1, 2].set_title("Subleading jet mass")
     a[1, 2].set_xlabel("$m_{21J_2}$")
     a[1, 2].hist(realdata[:,6], bins = BINS, range = (0, 750), color = "tab:orange", alpha = 0.5, label = label, density = True)
     a[1, 2].hist(fakedata[:,6], bins = BINS, range = (0, 750), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
     
-    a[2, 0].set_title("Leading N-subjettiness ratio")
+    a[2, 0].set_title("Leading jet tau21")
     a[2, 0].set_xlabel("$\\tau_{21J_1}$")
     a[2, 0].hist(realdata[:,7], bins = BINS, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
     a[2, 0].hist(fakedata[:,7], bins = BINS, range = (0, 1), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
 
-    a[2, 1].set_title("Subleading N-subjettiness ratio")
+    a[2, 1].set_title("Subleading jet tau21")
     a[2, 1].set_xlabel("$\\tau_{21J_2}$")
     a[2, 1].hist(realdata[:,8], bins = BINS, range = (0, 1), color = "tab:orange", alpha = 0.5, label = label, density = True)
     a[2, 1].hist(fakedata[:,8], bins = BINS, range = (0, 1), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
@@ -405,8 +413,9 @@ def graph_gan(generator, epoch, mode = "bg_SB"):
     a[2, 2].set_xlabel("$m_{JJ}$")
     a[2, 2].hist(realdata[:,9], bins = BINS, range = (1500, 5500), color = "tab:orange", alpha = 0.5, label = label, density = True)
     a[2, 2].hist(fakedata[:,9], bins = BINS, range = (1500, 5500), color = "tab:blue", histtype = "step", label = ganlabel, density = True)
+    # a[2, 2].legend(loc="right") # Too cramped
 
-    if DEBUG:
+    if TESTING:
         plt.show()
     else:
         plt.savefig("{}epoch{}-{}.png".format(PREFIX, epoch, mode))
@@ -437,7 +446,7 @@ def graph_losses(epoch):
     ax2.plot(train_disc_losses, 'b', label = "Training loss")
     ax2.plot(test_disc_losses, 'r', label = "Validation loss")
 
-    if DEBUG:
+    if TESTING:
         plt.show()
     else:
         plt.savefig("{}epoch{}-loss.png".format(PREFIX, epoch))
@@ -504,6 +513,7 @@ def train(dataset, testset, epochs, pretrain = False):
             graph_gan(generator, epoch + 1, mode = "bg_SB")
             graph_gan(generator, epoch + 1, mode = "bg_SR")
             graph_gan(generator, epoch + 1, mode = "sig_SR")
+            graph_gan(generator, epoch + 1, mode = "combined_SR")
             graph_losses(epoch + 1)
 
 print("Now pre-training discriminator for {} epochs".format(PRETRAIN_EPOCHS))
