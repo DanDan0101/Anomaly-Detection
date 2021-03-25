@@ -133,10 +133,6 @@ print("df_sig_SB shape {}".format(df_sig_SB.shape))
 print("df_sig_SR shape {}".format(df_sig_SR.shape))
 print()
 
-# Ensures all training batches have same size
-df_bg_SB.drop([i for i in range(df_bg_SB.shape[0] % (BATCH_SIZE * 4))], inplace = True)
-df_bg_SB.reset_index(drop = True, inplace = True)
-
 def cut_data(uncut_data, pTmin = 1200, etamax = 2.5):
     # Column 0: ptj1
     # Column 1: etaj1
@@ -153,9 +149,12 @@ del df_sig_SB
 del df_sig_SR
 gc.collect()
 
+# Ensures all training batches have same size
+np_bg_SB_trimmed = np.delete(np_bg_SB, [i for i in range(np_bg_SB.shape[0] % (BATCH_SIZE * 4))], axis = 0)
+
 # Normalize inputs between -1 and 1
-scaler = MinMaxScaler((-1,1)).fit(np_bg_SB)
-np_bg_SB_scaled = scaler.transform(np_bg_SB)
+scaler = MinMaxScaler((-1,1)).fit(np_bg_SB_trimmed)
+np_bg_SB_scaled = scaler.transform(np_bg_SB_trimmed)
 
 X_train, X_test = train_test_split(np_bg_SB_scaled, test_size = 0.25, random_state = 1234)
 len_dataset = int(X_train.shape[0] / BATCH_SIZE)
@@ -425,7 +424,7 @@ def train(dataset, testset, epochs):
 
         for batchnum, image_batch in enumerate(dataset):
             vectors = image_batch[:,:-1]
-            labels = tf.reshape(image_batch[:,-1], (-1,1)) # Need to reshape for concat operation to work
+            labels = tf.reshape(image_batch[:,-1], (BATCH_SIZE,1)) # Need to reshape for concat operation to work # Why does labels sometimes have a shape of 122 ????
             train_disc_loss += K_eval(train_step_discriminator(vectors, labels)) / len_dataset
             train_gen_loss += K_eval(train_step_generator(tf.constant(sample_labels(), dtype = tf.float32))) / len_dataset
 
@@ -437,7 +436,7 @@ def train(dataset, testset, epochs):
 
         for batchnum, test_batch in enumerate(testset):
             vectors = test_batch[:,:-1]
-            labels = tf.reshape(test_batch[:,-1], (-1,1))
+            labels = tf.reshape(test_batch[:,-1], (BATCH_SIZE,1))
             test_gen_loss += K_eval(evaluate_generator(tf.constant(sample_labels(), dtype = tf.float32))) / len_testset
             test_disc_loss += K_eval(evaluate_discriminator(vectors, labels)) / len_testset
 
